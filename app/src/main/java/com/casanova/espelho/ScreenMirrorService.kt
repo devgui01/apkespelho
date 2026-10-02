@@ -48,6 +48,12 @@ class ScreenMirrorService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        MainActivity.installHandler(this)
+        MainActivity.log(this, "svc: created")
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
@@ -118,7 +124,9 @@ class ScreenMirrorService : Service() {
 
         try {
             val mgr = getSystemService(MediaProjectionManager::class.java)
+            MainActivity.log(this, "svc: getProjection")
             projection = mgr.getMediaProjection(resultCode, data)
+            MainActivity.log(this, "svc: projection ok")
             try {
                 projection?.registerCallback(object : MediaProjection.Callback() {}, Handler(Looper.getMainLooper()))
             } catch (_: Exception) { }
@@ -132,8 +140,9 @@ class ScreenMirrorService : Service() {
             virtualDisplay = projection?.createVirtualDisplay(
                 "espelho", width, height, dpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface, null, null
-        )
+                imageReader!!.surface, null, null
+            )
+            MainActivity.log(this, "svc: vd ok " + width + "x" + height)
 
         captureThread = Thread {
             while (running.get()) {
@@ -160,6 +169,7 @@ class ScreenMirrorService : Service() {
             try {
                 val ss = ServerSocket(PORT)
                 serverSocket = ss
+                MainActivity.log(this, "svc: server ok 8080")
                 while (running.get()) {
                     try {
                         val client = ss.accept()

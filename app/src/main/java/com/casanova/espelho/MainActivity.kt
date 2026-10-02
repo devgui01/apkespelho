@@ -14,7 +14,41 @@ import java.util.Locale
 
 class MainActivity : Activity() {
 
-    companion object { const val REQ_CAPTURE = 1001 }
+    companion object {
+        const val REQ_CAPTURE = 1001
+        const val LOG = "crash.log"
+
+        fun log(ctx: Context, msg: String) {
+            try {
+                ctx.openFileOutput(LOG, Context.MODE_APPEND).use {
+                    it.write(("[" + System.currentTimeMillis() + "] " + msg + "\n").toByteArray())
+                }
+            } catch (_: Exception) { }
+        }
+
+        fun readLog(ctx: Context): String {
+            return try {
+                ctx.openFileInput(LOG).bufferedReader().readText()
+            } catch (_: Exception) { "" }
+        }
+
+        fun clearLog(ctx: Context) {
+            try { ctx.deleteFile(LOG) } catch (_: Exception) { }
+        }
+
+        fun installHandler(ctx: Context) {
+            val appCtx = ctx.applicationContext
+            val prev = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { t, e ->
+                try {
+                    val sw = java.io.StringWriter()
+                    e.printStackTrace(java.io.PrintWriter(sw))
+                    log(appCtx, "FATAL thread=" + t.name + " " + e.toString() + "\n" + sw.toString().take(2000))
+                } catch (_: Exception) { }
+                prev?.uncaughtException(t, e)
+            }
+        }
+    }
 
     private lateinit var statusText: TextView
     private lateinit var btnToggle: Button
@@ -37,8 +71,9 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installHandler(this)
         statusText = TextView(this).apply {
-            textSize = 16f
+            textSize = 15f
             text = "Carregando..."
         }
         btnToggle = Button(this).apply {
@@ -52,11 +87,25 @@ class MainActivity : Activity() {
             addView(btnToggle)
         }
         setContentView(layout)
-        updateUi()
+        val saved = readLog(this)
+        if (saved.isNotEmpty()) {
+            statusText.text = "LOG da última sessão:\n" + saved.take(1500)
+            btnToggle.text = "Limpar log e continuar"
+            streaming = false
+        } else {
+            updateUi()
+        }
     }
 
     private fun toggle() {
+        if (readLog(this).isNotEmpty() && !streaming) {
+            clearLog(this)
+            updateUi()
+            return
+        }
         if (!streaming) {
+            clearLog(this)
+            log(this, "app: pedir permissao")
             try {
                 val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 @Suppress("DEPRECATION")
