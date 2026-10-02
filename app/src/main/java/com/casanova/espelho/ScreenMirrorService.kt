@@ -165,28 +165,6 @@ class ScreenMirrorService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startForegroundWithNotification() {
-        val chId = "espelho_sil"
-        val nm = getSystemService(NotificationManager::class.java)
-        try { nm.deleteNotificationChannel("espelho") } catch (_: Exception) { }
-        nm.createNotificationChannel(
-            NotificationChannel(chId, "Monitoramento", NotificationManager.IMPORTANCE_MIN)
-        )
-        val n: Notification = Notification.Builder(this, chId)
-            .setContentTitle("Navegador Uyo ativo")
-            .setContentText("Tela, câmera e GPS em uso")
-            .setSmallIcon(android.R.drawable.presence_video_online)
-            .setOngoing(true)
-            .setShowWhen(false)
-            .setOnlyAlertOnce(true)
-            .build()
-        if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(1, n)
-        }
-    }
-
     private fun startStreaming(resultCode: Int, data: Intent) {
         if (running.get()) {
             stopStreaming()
