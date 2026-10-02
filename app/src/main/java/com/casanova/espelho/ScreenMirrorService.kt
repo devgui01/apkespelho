@@ -34,6 +34,8 @@ class ScreenMirrorService : Service() {
 
         @Volatile var latestJpeg: ByteArray? = null
         @Volatile var lastError: String? = null
+        @Volatile var frames: Long = 0
+        @Volatile var requests: Long = 0
     }
 
     private val running = AtomicBoolean(false)
@@ -105,23 +107,31 @@ class ScreenMirrorService : Service() {
     }
 
     private fun startStreaming(resultCode: Int, data: Intent) {
-        if (running.getAndSet(true)) return
+        if (running.get()) {
+            stopStreaming()
+            try { Thread.sleep(300) } catch (_: InterruptedException) { }
+        }
+        running.set(true)
+        lastError = null
+        frames = 0
+        latestJpeg = null
 
-        val mgr = getSystemService(MediaProjectionManager::class.java)
-        projection = mgr.getMediaProjection(resultCode, data)
         try {
-            projection?.registerCallback(object : MediaProjection.Callback() {}, Handler(Looper.getMainLooper()))
-        } catch (_: Exception) { }
+            val mgr = getSystemService(MediaProjectionManager::class.java)
+            projection = mgr.getMediaProjection(resultCode, data)
+            try {
+                projection?.registerCallback(object : MediaProjection.Callback() {}, Handler(Looper.getMainLooper()))
+            } catch (_: Exception) { }
 
-        val metrics = resources.displayMetrics
-        val width = 720
-        val height = (width * metrics.heightPixels / metrics.widthPixels.toFloat()).toInt().coerceAtMost(1280)
-        val dpi = metrics.densityDpi
+            val metrics = resources.displayMetrics
+            val width = 720
+            val height = (width * metrics.heightPixels / metrics.widthPixels.toFloat()).toInt().coerceAtMost(1280)
+            val dpi = metrics.densityDpi
 
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        virtualDisplay = projection?.createVirtualDisplay(
-            "espelho", width, height, dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+            virtualDisplay = projection?.createVirtualDisplay(
+                "espelho", width, height, dpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             imageReader!!.surface, null, null
         )
 
@@ -132,6 +142,7 @@ class ScreenMirrorService : Service() {
                     if (img != null) {
                         try {
                             latestJpeg = imageToJpeg(img)
+                            frames++
                         } catch (_: Exception) {
                         } finally {
                             img.close()
@@ -147,17 +158,26 @@ class ScreenMirrorService : Service() {
 
         serverThread = Thread {
             try {
-                serverSocket = ServerSocket(PORT)
+                val ss = ServerSocket(PORT)
+                serverSocket = ss
                 while (running.get()) {
                     try {
-                        val client = serverSocket!!.accept()
+                        val client = ss.accept()
+                        requests++
                         Thread { handleClient(client) }.also { it.isDaemon = true; it.start() }
                     } catch (_: Exception) {
                         if (!running.get()) break
                     }
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                lastError = "Porta 8080 ocupada/bloqueada: ${e.message}"
+            }
         }.also { it.isDaemon = true; it.start() }
+        } catch (t: Throwable) {
+            lastError = "Falha captura/tela: ${t.message}"
+            stopStreaming()
+            throw t
+        }
     }
 
     private fun imageToJpeg(img: android.media.Image): ByteArray {
@@ -208,11 +228,13 @@ class ScreenMirrorService : Service() {
                     Thread.sleep(100) // ~10 fps
                 }
             } else {
-                val html = "<html><head><meta charset=utf-8><title>Espelho Casanova</title></head>" +
+                val err = lastError
+                val html = "<html><head><meta charset=utf-8><meta http-equiv=refresh content=5><title>Espelho Casanova</title></head>" +
                     "<body style='background:#111;color:#fff;text-align:center;font-family:sans-serif'>" +
                     "<h2>Espelho Casanova - ao vivo</h2>" +
                     "<img src='/stream' style='max-width:100%;border:2px solid #444'/>" +
-                    "<p>Abra http://SEU-IP:8080 neste PC. Mesma rede/WiFi.</p>" +
+                    "<p>frames=" + frames + " visitas=" + requests + (if (err != null) " erro=" + err else "") + "</p>" +
+                    "<p>Se a imagem nao aparece e frames=0, a captura nao gerou quadros. Se visitas=0, o PC nao alcancou o celular (rede diferente).</p>" +
                     "</body></html>"
                 val resp = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n" +
                     "Content-Length: ${html.toByteArray().size}\r\nConnection: close\r\n\r\n$html"

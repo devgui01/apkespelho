@@ -20,6 +20,21 @@ class MainActivity : Activity() {
     private lateinit var btnToggle: Button
     private var streaming = false
 
+    private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val uiTick = object : Runnable {
+        override fun run() {
+            if (streaming) {
+                val ip = deviceIp()
+                val f = ScreenMirrorService.frames
+                val v = ScreenMirrorService.requests
+                val err = ScreenMirrorService.lastError
+                statusText.text = "Espelhando!\nNo PC (mesma rede/WiFi) abra:\nhttp://${ip}:8080\nframes=$f visitas=$v" +
+                    (if (err != null) "\nErro: $err" else "")
+                uiHandler.postDelayed(this, 2000)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         statusText = TextView(this).apply {
@@ -101,7 +116,10 @@ class MainActivity : Activity() {
         if (streaming) {
             statusText.text = "Espelhando!\nNo PC (mesma rede/WiFi) abra:\nhttp://${ip}:8080"
             btnToggle.text = "Parar"
+            uiHandler.removeCallbacks(uiTick)
+            uiHandler.post(uiTick)
         } else {
+            uiHandler.removeCallbacks(uiTick)
             statusText.text = String.format(
                 Locale.US,
                 "Pronto.\nIP do celular: %s\nToque em Iniciar e abra http://%s:8080 no PC.",
@@ -109,6 +127,11 @@ class MainActivity : Activity() {
             )
             btnToggle.text = "Iniciar espelho"
         }
+    }
+
+    override fun onDestroy() {
+        uiHandler.removeCallbacks(uiTick)
+        super.onDestroy()
     }
 
     private fun deviceIp(): String {
