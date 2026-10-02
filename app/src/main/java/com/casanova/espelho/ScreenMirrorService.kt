@@ -76,14 +76,14 @@ class ScreenMirrorService : Service() {
                 return START_STICKY
             }
             ACTION_START -> {
-                val code = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
+                val code = intent.getIntExtra(EXTRA_RESULT_CODE, 999)
                 val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
                     intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
                 } else {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra(EXTRA_DATA)
                 }
-                if (code == -1 || data == null) {
+                if (code != android.app.Activity.RESULT_OK || data == null) {
                     lastError = "Falha interna (codigo permissão)."
                     stopSelf()
                     return START_NOT_STICKY
