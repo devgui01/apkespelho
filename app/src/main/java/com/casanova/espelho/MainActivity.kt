@@ -4,45 +4,27 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
-import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
+import java.net.NetworkInterface
 import java.util.Locale
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
+
+    companion object { const val REQ_CAPTURE = 1001 }
 
     private lateinit var statusText: TextView
     private lateinit var btnToggle: Button
     private var streaming = false
 
-    private val projectionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            val svc = Intent(this, ScreenMirrorService::class.java).apply {
-                action = ScreenMirrorService.ACTION_START
-                putExtra(ScreenMirrorService.EXTRA_RESULT_CODE, result.resultCode)
-                putExtra(ScreenMirrorService.EXTRA_DATA, result.data!!)
-            }
-            ContextCompat.startForegroundService(this, svc)
-            streaming = true
-            updateUi()
-        } else {
-            statusText.text = "Permissão negada. Tente de novo."
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         statusText = TextView(this).apply {
             textSize = 16f
-            text = "Toque em Iniciar para espelhar."
+            text = "Carregando..."
         }
         btnToggle = Button(this).apply {
             text = "Iniciar espelho"
@@ -60,40 +42,84 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggle() {
         if (!streaming) {
-            val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            projectionLauncher.launch(mgr.createScreenCaptureIntent())
-        } else {
-            val svc = Intent(this, ScreenMirrorService::class.java).apply {
-                action = ScreenMirrorService.ACTION_STOP
+            try {
+                val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                @Suppress("DEPRECATION")
+                startActivityForResult(mgr.createScreenCaptureIntent(), REQ_CAPTURE)
+            } catch (e: Exception) {
+                statusText.text = "Erro ao pedir permissão: ${e.message}"
             }
-            startService(svc)
+        } else {
+            try {
+                val svc = Intent(this, ScreenMirrorService::class.java).apply {
+                    action = ScreenMirrorService.ACTION_STOP
+                }
+                startService(svc)
+            } catch (_: Exception) { }
             streaming = false
             updateUi()
         }
     }
 
+    @Deprecated("compat universal")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_CAPTURE) {
+            if (resultCode == RESULT_OK && data != null) {
+                val svc = Intent(this, ScreenMirrorService::class.java).apply {
+                    action = ScreenMirrorService.ACTION_START
+                    putExtra(ScreenMirrorService.EXTRA_RESULT_CODE, resultCode)
+                    putExtra(ScreenMirrorService.EXTRA_DATA, data)
+                }
+                try {
+                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(svc) else startService(svc)
+                    streaming = true
+                } catch (e: Exception) {
+                    statusText.text = "Erro ao iniciar: ${e.message}"
+                    streaming = false
+                }
+                updateUi()
+            } else {
+                statusText.text = "Permissão negada. Toque em Iniciar de novo."
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateUi()
+    }
+
     private fun updateUi() {
+        val ip = deviceIp()
         if (streaming) {
-            val ip = wifiIp()
             statusText.text = "Espelhando!\nNo PC (mesma rede/WiFi) abra:\nhttp://${ip}:8080"
             btnToggle.text = "Parar"
         } else {
-            val ip = wifiIp()
             statusText.text = String.format(
                 Locale.US,
-                "Parado.\nSeu IP atual: %s\nToque em Iniciar e abra http://%s:8080 no PC.",
+                "Pronto.\nIP do celular: %s\nToque em Iniciar e abra http://%s:8080 no PC.",
                 ip, ip
             )
             btnToggle.text = "Iniciar espelho"
         }
     }
 
-    private fun wifiIp(): String {
-        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        val i = wm.connectionInfo.ipAddress
-        return String.format(
-            Locale.US, "%d.%d.%d.%d",
-            i and 0xff, i shr 8 and 0xff, i shr 16 and 0xff, i shr 24 and 0xff
-        )
+    private fun deviceIp(): String {
+        try {
+            val ifaces = NetworkInterface.getNetworkInterfaces()
+            while (ifaces.hasMoreElements()) {
+                val ni = ifaces.nextElement()
+                val addrs = ni.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    if (!a.isLoopbackAddress && a.hostAddress != null && a.hostAddress!!.contains(".")) {
+                        val ip = a.hostAddress!!
+                        if (ip.startsWith("10.") || ip.startsWith("192.168.") || ip.startsWith("172.")) return ip
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return "ver-no-wifi"
     }
 }
