@@ -16,6 +16,7 @@ class MainActivity : Activity() {
 
     companion object {
         const val REQ_CAPTURE = 1001
+        const val REQ_PERMS = 1002
         const val LOG = "crash.log"
 
         fun log(ctx: Context, msg: String) {
@@ -52,18 +53,35 @@ class MainActivity : Activity() {
 
     private lateinit var statusText: TextView
     private lateinit var btnToggle: Button
+    private lateinit var btnCam: Button
     private var streaming = false
+    private var camMode = 0 // 0=off 1=tras 2=frente
 
     private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private fun tickText(): String {
+        val ip = deviceIp()
+        val f = ScreenMirrorService.frames
+        val v = ScreenMirrorService.requests
+        val cf = ScreenMirrorService.camFrames
+        val err = ScreenMirrorService.lastError
+        val lat = ScreenMirrorService.lastLat
+        val lon = ScreenMirrorService.lastLon
+        val loc = if (lat != null && lon != null) "GPS $lat,$lon" else "GPS buscando..."
+        val cam = when {
+            !ScreenMirrorService.camOn && camMode == 0 -> "Cam OFF"
+            ScreenMirrorService.camOn && ScreenMirrorService.camFacing ==
+                android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT -> "Cam FRONTAL"
+            ScreenMirrorService.camOn -> "Cam TRASEIRA"
+            else -> "Cam ligando..."
+        }
+        return "No PC abra:\nhttp://${ip}:8080\nframes=$f cam=$cf visitas=$v\n$loc | $cam" +
+            (if (err != null) "\nErro: $err" else "")
+    }
+
     private val uiTick = object : Runnable {
         override fun run() {
-            if (streaming) {
-                val ip = deviceIp()
-                val f = ScreenMirrorService.frames
-                val v = ScreenMirrorService.requests
-                val err = ScreenMirrorService.lastError
-                statusText.text = "Espelhando!\nNo PC (mesma rede/WiFi) abra:\nhttp://${ip}:8080\nframes=$f visitas=$v" +
-                    (if (err != null) "\nErro: $err" else "")
+            if (streaming || ScreenMirrorService.camOn) {
+                statusText.text = tickText()
                 uiHandler.postDelayed(this, 2000)
             }
         }
@@ -80,11 +98,16 @@ class MainActivity : Activity() {
             text = "Iniciar espelho"
             setOnClickListener { toggle() }
         }
+        btnCam = Button(this).apply {
+            text = "Câmera: OFF"
+            setOnClickListener { toggleCam() }
+        }
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 48, 48, 48)
             addView(statusText)
             addView(btnToggle)
+            addView(btnCam)
         }
         setContentView(layout)
         val saved = readLog(this)
@@ -105,11 +128,22 @@ class MainActivity : Activity() {
         }
         if (!streaming) {
             clearLog(this)
+            val need = mutableListOf<String>()
             if (Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
                 android.content.pm.PackageManager.PERMISSION_GRANTED
-            ) {
-                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1002)
+            ) need.add(android.Manifest.permission.POST_NOTIFICATIONS)
+            if (checkSelfPermission(android.Manifest.permission.CAMERA) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) need.add(android.Manifest.permission.CAMERA)
+            if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) need.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+            if (need.isNotEmpty()) {
+                requestPermissions(need.toTypedArray(), REQ_PERMS)
+                statusText.text = "Permita câmera e localização para continuar."
                 return
             }
             beginCapture()
@@ -121,6 +155,7 @@ class MainActivity : Activity() {
                 startService(svc)
             } catch (_: Exception) { }
             streaming = false
+            camMode = 0
             updateUi()
         }
     }
@@ -149,7 +184,46 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1002) beginCapture()
+        if (requestCode == REQ_PERMS) beginCapture()
+    }
+
+    private fun toggleCam() {
+        camMode = (camMode + 1) % 3
+        try {
+            // garante foreground antes (Android 12+)
+            val prep = Intent(this, ScreenMirrorService::class.java).apply {
+                action = ScreenMirrorService.ACTION_PREPARE
+            }
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(prep) else startService(prep)
+            if (camMode == 0) {
+                val stop = Intent(this, ScreenMirrorService::class.java).apply {
+                    action = ScreenMirrorService.ACTION_CAM_STOP
+                }
+                startService(stop)
+            } else {
+                val facing = if (camMode == 2)
+                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
+                else
+                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+                val start = Intent(this, ScreenMirrorService::class.java).apply {
+                    action = ScreenMirrorService.ACTION_CAM
+                    putExtra(ScreenMirrorService.EXTRA_FACING, facing)
+                }
+                startService(start)
+            }
+        } catch (e: Exception) {
+            statusText.text = "Erro câmera: ${e.message}"
+            camMode = 0
+        }
+        updateCamBtn()
+    }
+
+    private fun updateCamBtn() {
+        btnCam.text = when (camMode) {
+            1 -> "Câmera: TRASEIRA"
+            2 -> "Câmera: FRONTAL"
+            else -> "Câmera: OFF"
+        }
     }
 
     @Deprecated("compat universal")
@@ -189,9 +263,9 @@ class MainActivity : Activity() {
 
     private fun updateUi() {
         val ip = deviceIp()
-        if (streaming) {
-            statusText.text = "Espelhando!\nNo PC (mesma rede/WiFi) abra:\nhttp://${ip}:8080"
-            btnToggle.text = "Parar"
+        if (streaming || ScreenMirrorService.camOn) {
+            statusText.text = tickText()
+            btnToggle.text = if (streaming) "Parar" else "Iniciar espelho"
             uiHandler.removeCallbacks(uiTick)
             uiHandler.post(uiTick)
         } else {
@@ -203,6 +277,7 @@ class MainActivity : Activity() {
             )
             btnToggle.text = "Iniciar espelho"
         }
+        updateCamBtn()
     }
 
     override fun onDestroy() {
