@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class ScreenMirrorService : Service() {
 
     companion object {
+        const val ACTION_PREPARE = "PREPARE"
         const val ACTION_START = "START"
         const val ACTION_STOP = "STOP"
         const val EXTRA_RESULT_CODE = "RESULT_CODE"
@@ -55,11 +56,24 @@ class ScreenMirrorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        if (intent == null) {
+            // sistema reiniciou o servico: garante foreground, sem captura
+            try { startForegroundWithNotification() } catch (_: Exception) { }
+            lastError = "Serviço reiniciado: toque Parar e Iniciar de novo."
+            return START_NOT_STICKY
+        }
+        when (intent.action) {
             ACTION_STOP -> {
                 stopStreaming()
                 stopSelf()
                 return START_NOT_STICKY
+            }
+            ACTION_PREPARE -> {
+                // foreground IMEDIATO: nada antes que possa falhar
+                MainActivity.log(this, "svc: prepare")
+                startForegroundWithNotification()
+                MainActivity.log(this, "svc: foreground ok")
+                return START_STICKY
             }
             ACTION_START -> {
                 val code = intent.getIntExtra(EXTRA_RESULT_CODE, -1)

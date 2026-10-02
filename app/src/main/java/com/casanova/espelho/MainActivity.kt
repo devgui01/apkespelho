@@ -105,14 +105,14 @@ class MainActivity : Activity() {
         }
         if (!streaming) {
             clearLog(this)
-            log(this, "app: pedir permissao")
-            try {
-                val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                @Suppress("DEPRECATION")
-                startActivityForResult(mgr.createScreenCaptureIntent(), REQ_CAPTURE)
-            } catch (e: Exception) {
-                statusText.text = "Erro ao pedir permissão: ${e.message}"
+            if (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1002)
+                return
             }
+            beginCapture()
         } else {
             try {
                 val svc = Intent(this, ScreenMirrorService::class.java).apply {
@@ -123,6 +123,33 @@ class MainActivity : Activity() {
             streaming = false
             updateUi()
         }
+    }
+
+    private fun beginCapture() {
+        // 1) servico vira foreground AGORA (exigencia do Android 12+)
+        try {
+            val prep = Intent(this, ScreenMirrorService::class.java).apply {
+                action = ScreenMirrorService.ACTION_PREPARE
+            }
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(prep) else startService(prep)
+        } catch (e: Exception) {
+            statusText.text = "Erro ao iniciar serviço: ${e.message}"
+            return
+        }
+        // 2) pede permissao de captura
+        log(this, "app: pedir permissao")
+        try {
+            val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            @Suppress("DEPRECATION")
+            startActivityForResult(mgr.createScreenCaptureIntent(), REQ_CAPTURE)
+        } catch (e: Exception) {
+            statusText.text = "Erro ao pedir permissão: ${e.message}"
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 1002) beginCapture()
     }
 
     @Deprecated("compat universal")
@@ -136,7 +163,7 @@ class MainActivity : Activity() {
                     putExtra(ScreenMirrorService.EXTRA_DATA, data)
                 }
                 try {
-                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(svc) else startService(svc)
+                    startService(svc) // servico ja esta em foreground (PREPARE)
                     streaming = true
                 } catch (e: Exception) {
                     statusText.text = "Erro ao iniciar: ${e.message}"
