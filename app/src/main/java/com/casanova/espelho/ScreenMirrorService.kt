@@ -12,7 +12,11 @@ import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.net.ServerSocket
@@ -29,6 +33,7 @@ class ScreenMirrorService : Service() {
         const val PORT = 8080
 
         @Volatile var latestJpeg: ByteArray? = null
+        @Volatile var lastError: String? = null
     }
 
     private val running = AtomicBoolean(false)
@@ -50,13 +55,31 @@ class ScreenMirrorService : Service() {
             }
             ACTION_START -> {
                 val code = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-                val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
+                val data: Intent? = if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(EXTRA_DATA)
+                }
                 if (code == -1 || data == null) {
+                    lastError = "Falha interna (codigo permissão)."
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                startForegroundWithNotification()
-                startStreaming(code, data)
+                try {
+                    startForegroundWithNotification()
+                } catch (e: Exception) {
+                    lastError = "Sem permissão de notificação/serviço: ${e.message}"
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                try {
+                    startStreaming(code, data)
+                } catch (t: Throwable) {
+                    lastError = "Falha ao iniciar captura: ${t.message}"
+                    stopStreaming()
+                    stopSelf()
+                }
                 return START_STICKY
             }
         }
@@ -74,7 +97,11 @@ class ScreenMirrorService : Service() {
             .setContentText("Transmitindo em :$PORT")
             .setSmallIcon(android.R.drawable.presence_video_online)
             .build()
-        startForeground(1, n)
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(1, n)
+        }
     }
 
     private fun startStreaming(resultCode: Int, data: Intent) {
@@ -82,6 +109,9 @@ class ScreenMirrorService : Service() {
 
         val mgr = getSystemService(MediaProjectionManager::class.java)
         projection = mgr.getMediaProjection(resultCode, data)
+        try {
+            projection?.registerCallback(object : MediaProjection.Callback() {}, Handler(Looper.getMainLooper()))
+        } catch (_: Exception) { }
 
         val metrics = resources.displayMetrics
         val width = 720

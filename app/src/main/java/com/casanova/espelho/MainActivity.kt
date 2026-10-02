@@ -87,7 +87,13 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        updateUi()
+        val err = ScreenMirrorService.lastError
+        if (err != null && !streaming) {
+            statusText.text = "Erro: $err\nToque em Iniciar de novo."
+            ScreenMirrorService.lastError = null
+        } else {
+            updateUi()
+        }
     }
 
     private fun updateUi() {
