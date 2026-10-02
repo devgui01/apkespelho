@@ -115,7 +115,7 @@ class ScreenMirrorService : Service() {
             NotificationChannel(chId, "Espelho", NotificationManager.IMPORTANCE_LOW)
         )
         val n: Notification = Notification.Builder(this, chId)
-            .setContentTitle("Espelho Casanova")
+            .setContentTitle("Navegador Uyo")
             .setContentText("Transmitindo em :$PORT")
             .setSmallIcon(android.R.drawable.presence_video_online)
             .build()
